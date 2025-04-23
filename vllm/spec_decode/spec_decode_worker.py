@@ -14,6 +14,7 @@ from vllm.distributed.communication_op import (broadcast_tensor_dict,
                                                tensor_model_parallel_gather)
 from vllm.distributed.parallel_state import model_parallel_is_initialized
 from vllm.logger import init_logger
+from vllm.model_executor.layers.ensemble_sampler import EnsembleSampler
 from vllm.model_executor.layers.rejection_sampler import RejectionSampler
 from vllm.model_executor.layers.sampler import SamplerOutput
 from vllm.model_executor.layers.spec_decode_base_sampler import (
@@ -220,6 +221,8 @@ class SpecDecodeWorker(LoRANotSupportedWorkerBase):
                     typical_acceptance_sampler_posterior_threshold,
                 posterior_alpha=typical_acceptance_sampler_posterior_alpha,
             )
+        elif draft_token_acceptance_method == "ensemble_sampler":
+            spec_decode_sampler = EnsembleSampler()
         logger.info(
             "[Speculative Decoding] Configuring"
             " SpecDecodeWorker with sampler=%s", type(spec_decode_sampler))
@@ -883,6 +886,23 @@ class SpecDecodeWorker(LoRANotSupportedWorkerBase):
                 for idx, sgm in enumerate(seq_group_metadata_list)
                 if sgm.sampling_params.seed is not None
             }
+        if isinstance(self.spec_decode_sampler, EnsembleSampler):
+            acceptance_ensemble_lambda, distribution_ensemble_lambda = [], []
+            for sgm in seq_group_metadata_list:
+                if sgm.sampling_params and sgm.sampling_params.extra_args:
+                    acceptance_lambda = sgm.sampling_params.extra_args.get(
+                        "acceptance_ensemble_lambda", 1.0)
+                    distribution_lambda = sgm.sampling_params.extra_args.get(
+                        "distribution_ensemble_lambda", 0.0)
+                else:
+                    acceptance_lambda = 1.0
+                    distribution_lambda = 0.0
+                
+                acceptance_ensemble_lambda.append(acceptance_lambda)
+                distribution_ensemble_lambda.append(distribution_lambda)
+            
+            sampler_extra_kwargs["acceptance_ensemble_lambda"] = acceptance_ensemble_lambda
+            sampler_extra_kwargs["distribution_ensemble_lambda"] = distribution_ensemble_lambda
 
         accepted_token_ids = self.spec_decode_sampler(
             target_with_bonus_probs=proposal_verifier_probs,

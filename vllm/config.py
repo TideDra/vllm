@@ -2243,16 +2243,16 @@ class SpeculativeConfig:
 
         if (self.draft_token_acceptance_method is None):
             raise ValueError("draft_token_acceptance_method is not set. "
-                             "Expected values are rejection_sampler or "
-                             "typical_acceptance_sampler.")
+                             "Expected values are rejection_sampler, "
+                             "typical_acceptance_sampler or ensemble_sampler.")
 
         if (self.draft_token_acceptance_method != 'rejection_sampler'
-                and self.draft_token_acceptance_method
-                != 'typical_acceptance_sampler'):
+                and self.draft_token_acceptance_method != 'typical_acceptance_sampler'
+                and self.draft_token_acceptance_method != 'ensemble_sampler'):
             raise ValueError(
-                "Expected draft_token_acceptance_method to be either "
-                "rejection_sampler or typical_acceptance_sampler. Instead it "
-                f"is {self.draft_token_acceptance_method}")
+                "Expected draft_token_acceptance_method to be rejection_sampler, "
+                "typical_acceptance_sampler or ensemble_sampler. Instead it "
+                f"is {self.acceptance_method}")
 
         if (self.typical_acceptance_sampler_posterior_threshold < 0
                 or self.typical_acceptance_sampler_posterior_alpha < 0):
