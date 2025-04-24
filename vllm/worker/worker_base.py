@@ -572,23 +572,29 @@ class WorkerWrapperBase:
             worker_extension_cls = resolve_obj_by_qualname(
                 self.vllm_config.parallel_config.worker_extension_cls)
             extended_calls = []
-            if worker_extension_cls not in worker_class.__bases__:
+            from inspect import signature, isfunction
+            if isfunction(worker_class):
+                #Corner case for create_spec_worker
+                real_worker_class = signature(worker_class).return_annotation
+            else:
+                real_worker_class = worker_class
+            if worker_extension_cls not in real_worker_class.__bases__:
                 # check any conflicts between worker and worker_extension_cls
                 for attr in dir(worker_extension_cls):
                     if attr.startswith("__"):
                         continue
-                    assert not hasattr(worker_class, attr), (
-                        f"Worker class {worker_class} already has an attribute"
+                    assert not hasattr(real_worker_class, attr), (
+                        f"Worker class {real_worker_class} already has an attribute"
                         f" {attr}, which conflicts with the worker"
                         f" extension class {worker_extension_cls}.")
                     if callable(getattr(worker_extension_cls, attr)):
                         extended_calls.append(attr)
                 # dynamically inherit the worker extension class
-                worker_class.__bases__ = worker_class.__bases__ + (
+                real_worker_class.__bases__ = real_worker_class.__bases__ + (
                     worker_extension_cls, )
                 logger.info(
                     "Injected %s into %s for extended collective_rpc calls %s",
-                    worker_extension_cls, worker_class, extended_calls)
+                    worker_extension_cls, real_worker_class, extended_calls)
         with set_current_vllm_config(self.vllm_config):
             # To make vLLM config available during worker initialization
             self.worker = worker_class(**kwargs)

@@ -53,68 +53,6 @@ from vllm.worker.worker_base import LoRANotSupportedWorkerBase, WorkerBase
 logger = init_logger(__name__)
 
 
-def create_spec_worker(*args, **kwargs) -> "SpecDecodeWorker":
-    """Helper method that is the entrypoint for Executors which use
-    WorkerWrapper. It constructs a SpecDecodeWorker from the speculative config.
-    """
-    vllm_config: VllmConfig = kwargs.get("vllm_config")
-    speculative_config: SpeculativeConfig = vllm_config.speculative_config
-    assert speculative_config is not None
-
-    if vllm_config.parallel_config.pipeline_parallel_size > 1:
-        raise NotImplementedError("Speculative decoding is currently "
-                                  "incompatible with pipeline parallelism")
-
-    draft_worker_kwargs = kwargs.copy()
-
-    kwargs["model_runner_cls"] = TargetModelRunner
-    target_worker_config = copy.deepcopy(vllm_config)
-    target_worker_config.parallel_config.worker_cls =\
-        target_worker_config.parallel_config.sd_worker_cls
-    cls = resolve_obj_by_qualname(
-        target_worker_config.parallel_config.worker_cls)
-    target_worker = cls(*args, **kwargs)
-    # Set the disable_logprobs variable in the TargetModelRunner instance
-    # as per its value specified in the SpeculativeConfig.
-    target_worker.model_runner.disable_logprobs =\
-         speculative_config.disable_logprobs
-
-    draft_worker_config = copy.deepcopy(vllm_config)
-    draft_worker_config.model_config = speculative_config.draft_model_config
-    draft_worker_config.quant_config = VllmConfig._get_quantization_config(
-        draft_worker_config.model_config,
-        vllm_config.load_config,
-    )
-    speculative_config.draft_parallel_config.worker_cls =\
-        draft_worker_config.parallel_config.sd_worker_cls
-    draft_worker_config.parallel_config = speculative_config.draft_parallel_config  # noqa
-    # TODO allow draft-model specific load config.
-
-    # Override draft-model specific worker args.
-    draft_worker_kwargs.update(
-        vllm_config=draft_worker_config,
-        ngram_prompt_lookup_max=speculative_config.ngram_prompt_lookup_max,
-        ngram_prompt_lookup_min=speculative_config.ngram_prompt_lookup_min,
-    )
-
-    spec_decode_worker = SpecDecodeWorker.create_worker(
-        scorer_worker=target_worker,
-        draft_worker_kwargs=draft_worker_kwargs,
-        disable_mqa_scorer=speculative_config.speculative_disable_mqa_scorer,
-        disable_by_batch_size=speculative_config.
-        speculative_disable_by_batch_size,
-        draft_token_acceptance_method=speculative_config.
-        draft_token_acceptance_method,
-        typical_acceptance_sampler_posterior_threshold=speculative_config.
-        typical_acceptance_sampler_posterior_threshold,
-        typical_acceptance_sampler_posterior_alpha=speculative_config.
-        typical_acceptance_sampler_posterior_alpha,
-        disable_logprobs=speculative_config.disable_logprobs,
-        disable_log_stats=speculative_config.disable_log_stats,
-        num_speculative_tokens=speculative_config.num_speculative_tokens,
-    )
-
-    return spec_decode_worker
 
 
 # Reminder: Please update docs/source/features/compatibility_matrix.md
@@ -1309,6 +1247,18 @@ class SpecDecodeWorker(LoRANotSupportedWorkerBase):
     def stop_profile(self):
         if isinstance(self.scorer_worker, WorkerBase):
             self.scorer_worker.stop_profile()
+    
+    def sleep(self, level: int = 1):
+        if isinstance(self.scorer_worker, WorkerBase):
+            self.scorer_worker.sleep(level)
+
+
+    def wake_up(self):
+        if isinstance(self.scorer_worker, WorkerBase):
+            self.scorer_worker.wake_up()
+    
+    def __getattr__(self, attr):
+        return getattr(self.scorer_worker, attr)
 
 
 def split_num_cache_blocks_evenly(scorer_cache_block_size_bytes: int,
@@ -1344,3 +1294,67 @@ def prepare_prefill_hidden_states(
     # align n-1th hidden state with nth token.
     return HiddenStates(prefill_hidden_states.roll(
         shifts=1, dims=0)) if prefill_hidden_states is not None else None
+
+
+def create_spec_worker(*args, **kwargs) -> SpecDecodeWorker:
+    """Helper method that is the entrypoint for Executors which use
+    WorkerWrapper. It constructs a SpecDecodeWorker from the speculative config.
+    """
+    vllm_config: VllmConfig = kwargs.get("vllm_config")
+    speculative_config: SpeculativeConfig = vllm_config.speculative_config
+    assert speculative_config is not None
+
+    if vllm_config.parallel_config.pipeline_parallel_size > 1:
+        raise NotImplementedError("Speculative decoding is currently "
+                                  "incompatible with pipeline parallelism")
+
+    draft_worker_kwargs = kwargs.copy()
+
+    kwargs["model_runner_cls"] = TargetModelRunner
+    target_worker_config = copy.deepcopy(vllm_config)
+    target_worker_config.parallel_config.worker_cls =\
+        target_worker_config.parallel_config.sd_worker_cls
+    cls = resolve_obj_by_qualname(
+        target_worker_config.parallel_config.worker_cls)
+    target_worker = cls(*args, **kwargs)
+    # Set the disable_logprobs variable in the TargetModelRunner instance
+    # as per its value specified in the SpeculativeConfig.
+    target_worker.model_runner.disable_logprobs =\
+         speculative_config.disable_logprobs
+
+    draft_worker_config = copy.deepcopy(vllm_config)
+    draft_worker_config.model_config = speculative_config.draft_model_config
+    draft_worker_config.quant_config = VllmConfig._get_quantization_config(
+        draft_worker_config.model_config,
+        vllm_config.load_config,
+    )
+    speculative_config.draft_parallel_config.worker_cls =\
+        draft_worker_config.parallel_config.sd_worker_cls
+    draft_worker_config.parallel_config = speculative_config.draft_parallel_config  # noqa
+    # TODO allow draft-model specific load config.
+
+    # Override draft-model specific worker args.
+    draft_worker_kwargs.update(
+        vllm_config=draft_worker_config,
+        ngram_prompt_lookup_max=speculative_config.ngram_prompt_lookup_max,
+        ngram_prompt_lookup_min=speculative_config.ngram_prompt_lookup_min,
+    )
+
+    spec_decode_worker = SpecDecodeWorker.create_worker(
+        scorer_worker=target_worker,
+        draft_worker_kwargs=draft_worker_kwargs,
+        disable_mqa_scorer=speculative_config.speculative_disable_mqa_scorer,
+        disable_by_batch_size=speculative_config.
+        speculative_disable_by_batch_size,
+        draft_token_acceptance_method=speculative_config.
+        draft_token_acceptance_method,
+        typical_acceptance_sampler_posterior_threshold=speculative_config.
+        typical_acceptance_sampler_posterior_threshold,
+        typical_acceptance_sampler_posterior_alpha=speculative_config.
+        typical_acceptance_sampler_posterior_alpha,
+        disable_logprobs=speculative_config.disable_logprobs,
+        disable_log_stats=speculative_config.disable_log_stats,
+        num_speculative_tokens=speculative_config.num_speculative_tokens,
+    )
+
+    return spec_decode_worker
