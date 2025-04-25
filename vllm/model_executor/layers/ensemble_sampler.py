@@ -45,10 +45,10 @@ class EnsembleSampler(RejectionSampler):
 
         target_probs = target_with_bonus_probs[:, :-1]
         if distribution_ensemble_lambda is not None:
-            distribution_ensemble_lambda = torch.tensor(distribution_ensemble_lambda,
-                                                        dtype=draft_probs.dtype,
-                                                        device=draft_probs.device).view(-1, 1, 1)
-            target_probs = distribution_ensemble_lambda * target_probs + (1 - distribution_ensemble_lambda) * draft_probs
+            lambda_d = torch.tensor(distribution_ensemble_lambda,
+                                    dtype=draft_probs.dtype,
+                                    device=draft_probs.device).view(-1, 1, 1)
+            target_probs = lambda_d * target_probs + (1 - lambda_d) * draft_probs
 
         accepted = self._get_accepted(target_probs,
                                       draft_probs,
@@ -82,7 +82,7 @@ class EnsembleSampler(RejectionSampler):
         target_probs: torch.Tensor,  # [batch_size, k, vocab_size]
         draft_probs: torch.Tensor,  # [batch_size, k, vocab_size]
         draft_token_ids: torch.Tensor,  # [batch_size, k]
-        acceptance_ensemble_lambda: Optional[torch.Tensor], # [batch_size, 1]
+        acceptance_ensemble_lambda: Optional[List[float]],
         seeded_seqs: Optional[Dict[int, torch.Generator]],
     ) -> torch.Tensor:
         r"""Create bool matrix over the proposed draft tokens. If
@@ -96,8 +96,7 @@ class EnsembleSampler(RejectionSampler):
         is accepted with probability:
 
         .. math::
-            \min\left(1, \frac{(1-\lambda_d)q(\hat{x}_{n+1}|x_1, \dots, x_n)
-                            + \lambda_d p(\hat{x}_{n+1}|x_1, \dots, x_n)}
+            \min\left(1, \frac{q(\hat{x}_{n+1}|x_1, \dots, x_n)}
                            {\lambda_a p(\hat{x}_{n+1}|x_1, \dots, x_n)}\right)
 
         This implementation does not apply causality. When using the output,
@@ -121,18 +120,17 @@ class EnsembleSampler(RejectionSampler):
                                              draft_token_ids]
         
         if acceptance_ensemble_lambda is not None:
-            acceptance_ensemble_lambda = torch.tensor(acceptance_ensemble_lambda,
-                                                      dtype=draft_probs.dtype,
-                                                      device=draft_probs.device).view(-1, 1)
-            acceptance_ensemble_lambda.clamp_(min=1e-4, max=1.0)
-            accept_ratio = selected_target_probs / (selected_draft_probs * acceptance_ensemble_lambda)
+            lambda_a = torch.tensor(acceptance_ensemble_lambda,
+                                    dtype=draft_probs.dtype,
+                                    device=draft_probs.device).view(-1, 1)
+            lambda_a.clamp_min_(1e-4)
+            accept_ratio = selected_target_probs / (selected_draft_probs * lambda_a)
         else:
             accept_ratio = selected_target_probs / selected_draft_probs
 
         uniform_rand = self._create_uniform_samples(seeded_seqs, batch_size,
                                                     k - 1, target_probs.device)
-
-        capped_ratio = torch.clamp(accept_ratio, min=0.0, max=1.0)
-        accepted = uniform_rand < capped_ratio
+        
+        accepted = uniform_rand < accept_ratio
 
         return accepted
