@@ -825,22 +825,28 @@ class SpecDecodeWorker(LoRANotSupportedWorkerBase):
                 if sgm.sampling_params.seed is not None
             }
         if isinstance(self.spec_decode_sampler, EnsembleSampler):
-            acceptance_ensemble_lambda, distribution_ensemble_lambda = [], []
+            batch_lambda_a, batch_lambda_d = [], []
+            skip_acceptance_ensemble = skip_distribution_ensemble = True
             for sgm in seq_group_metadata_list:
                 if sgm.sampling_params and sgm.sampling_params.extra_args:
-                    acceptance_lambda = sgm.sampling_params.extra_args.get(
+                    lambda_a = sgm.sampling_params.extra_args.get(
                         "acceptance_ensemble_lambda", 1.0)
-                    distribution_lambda = sgm.sampling_params.extra_args.get(
-                        "distribution_ensemble_lambda", 0.0)
+                    lambda_d = sgm.sampling_params.extra_args.get(
+                        "distribution_ensemble_lambda", 1.0)
+                    if lambda_a != 1.0:
+                        skip_acceptance_ensemble = False
+                    if lambda_d != 1.0:
+                        skip_distribution_ensemble = False
                 else:
-                    acceptance_lambda = 1.0
-                    distribution_lambda = 0.0
+                    lambda_a = lambda_d = 1.0
                 
-                acceptance_ensemble_lambda.append(acceptance_lambda)
-                distribution_ensemble_lambda.append(distribution_lambda)
+                batch_lambda_a.append(lambda_a)
+                batch_lambda_d.append(lambda_d)
             
-            sampler_extra_kwargs["acceptance_ensemble_lambda"] = acceptance_ensemble_lambda
-            sampler_extra_kwargs["distribution_ensemble_lambda"] = distribution_ensemble_lambda
+            sampler_extra_kwargs["acceptance_ensemble_lambda"] = (
+                None if skip_acceptance_ensemble else batch_lambda_a)
+            sampler_extra_kwargs["distribution_ensemble_lambda"] = (
+                None if skip_distribution_ensemble else batch_lambda_d)
 
         accepted_token_ids = self.spec_decode_sampler(
             target_with_bonus_probs=proposal_verifier_probs,

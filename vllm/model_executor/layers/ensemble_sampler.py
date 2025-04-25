@@ -42,27 +42,14 @@ class EnsembleSampler(RejectionSampler):
         # just an empty tensor.
         if batch_size == 0:
             return torch.empty(0, k + 1, device=draft_probs.device, dtype=int)
-        
-        if acceptance_ensemble_lambda is None:
-            acceptance_ensemble_lambda = torch.ones((batch_size, 1), 
-                                                    dtype=draft_probs.dtype,
-                                                    device=draft_probs.device)
-        else:
-            acceptance_ensemble_lambda = torch.tensor(acceptance_ensemble_lambda,
-                                                      dtype=draft_probs.dtype,
-                                                      device=draft_probs.device).view(-1, 1)
-
-        if distribution_ensemble_lambda is None:
-            distribution_ensemble_lambda = torch.ones((batch_size, 1), 
-                                                       dtype=draft_probs.dtype,
-                                                       device=draft_probs.device)
-        else:
-            distribution_ensemble_lambda = torch.tensor(distribution_ensemble_lambda,
-                                                        dtype=draft_probs.dtype,
-                                                        device=draft_probs.device).view(-1, 1)
 
         target_probs = target_with_bonus_probs[:, :-1]
-        target_probs = distribution_ensemble_lambda * target_probs + (1 - distribution_ensemble_lambda) * draft_probs
+        if distribution_ensemble_lambda is not None:
+            distribution_ensemble_lambda = torch.tensor(distribution_ensemble_lambda,
+                                                        dtype=draft_probs.dtype,
+                                                        device=draft_probs.device).view(-1, 1, 1)
+            target_probs = distribution_ensemble_lambda * target_probs + (1 - distribution_ensemble_lambda) * draft_probs
+
         accepted = self._get_accepted(target_probs,
                                       draft_probs,
                                       draft_token_ids,
@@ -95,7 +82,7 @@ class EnsembleSampler(RejectionSampler):
         target_probs: torch.Tensor,  # [batch_size, k, vocab_size]
         draft_probs: torch.Tensor,  # [batch_size, k, vocab_size]
         draft_token_ids: torch.Tensor,  # [batch_size, k]
-        acceptance_ensemble_lambda: torch.Tensor, # [batch_size, 1]
+        acceptance_ensemble_lambda: Optional[torch.Tensor], # [batch_size, 1]
         seeded_seqs: Optional[Dict[int, torch.Generator]],
     ) -> torch.Tensor:
         r"""Create bool matrix over the proposed draft tokens. If
@@ -133,8 +120,14 @@ class EnsembleSampler(RejectionSampler):
         selected_target_probs = target_probs[batch_indices, probs_indicies,
                                              draft_token_ids]
         
-        acceptance_ensemble_lambda = torch.clamp(acceptance_ensemble_lambda, min=1e-4, max=1.0)
-        accept_ratio = selected_target_probs / (selected_draft_probs * acceptance_ensemble_lambda)
+        if acceptance_ensemble_lambda is not None:
+            acceptance_ensemble_lambda = torch.tensor(acceptance_ensemble_lambda,
+                                                      dtype=draft_probs.dtype,
+                                                      device=draft_probs.device).view(-1, 1)
+            acceptance_ensemble_lambda.clamp_(min=1e-4, max=1.0)
+            accept_ratio = selected_target_probs / (selected_draft_probs * acceptance_ensemble_lambda)
+        else:
+            accept_ratio = selected_target_probs / selected_draft_probs
 
         uniform_rand = self._create_uniform_samples(seeded_seqs, batch_size,
                                                     k - 1, target_probs.device)
