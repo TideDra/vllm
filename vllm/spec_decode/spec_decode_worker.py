@@ -802,6 +802,7 @@ class SpecDecodeWorker(LoRANotSupportedWorkerBase):
 
         # Get probabilities of target model, including bonus tokens.
         proposal_verifier_probs = proposal_scores.probs[spec_indices]
+        logprobs = proposal_scores.logprobs
 
         # Get non-speculative sampled tokens from target model.
         non_spec_token_ids = proposal_scores.token_ids[non_spec_indices]
@@ -843,18 +844,26 @@ class SpecDecodeWorker(LoRANotSupportedWorkerBase):
                 batch_lambda_a.append(lambda_a)
                 batch_lambda_d.append(lambda_d)
             
-            sampler_extra_kwargs["acceptance_ensemble_lambda"] = (
-                None if skip_acceptance_ensemble else batch_lambda_a)
-            sampler_extra_kwargs["distribution_ensemble_lambda"] = (
-                None if skip_distribution_ensemble else batch_lambda_d)
+            accepted_token_ids, ensembled_logprobs = self.spec_decode_sampler(
+                target_with_bonus_probs=proposal_verifier_probs,
+                bonus_token_ids=bonus_token_ids,
+                draft_probs=proposal_probs,
+                draft_token_ids=proposal_token_ids,
+                acceptance_ensemble_lambda=(None if skip_acceptance_ensemble else batch_lambda_a),
+                distribution_ensemble_lambda=(None if skip_distribution_ensemble else batch_lambda_d),
+                **sampler_extra_kwargs,
+            )
+            if ensembled_logprobs is not None:
+                logprobs = ensembled_logprobs
 
-        accepted_token_ids = self.spec_decode_sampler(
-            target_with_bonus_probs=proposal_verifier_probs,
-            bonus_token_ids=bonus_token_ids,
-            draft_probs=proposal_probs,
-            draft_token_ids=proposal_token_ids,
-            **sampler_extra_kwargs,
-        )
+        else:
+            accepted_token_ids = self.spec_decode_sampler(
+                target_with_bonus_probs=proposal_verifier_probs,
+                bonus_token_ids=bonus_token_ids,
+                draft_probs=proposal_probs,
+                draft_token_ids=proposal_token_ids,
+                **sampler_extra_kwargs,
+            )
         # Append output tokens from non-speculative sequences to
         # the accepted token ids tensor.
         non_spec_token_ids = non_spec_token_ids.expand(-1, max_proposal_len +
@@ -862,7 +871,6 @@ class SpecDecodeWorker(LoRANotSupportedWorkerBase):
         non_spec_token_ids[:, 1:] = -1
         accepted_token_ids = torch.cat(
             [accepted_token_ids, non_spec_token_ids])
-        logprobs = proposal_scores.logprobs
         # Rearrange so that results are in the order of the original seq group
         # metadata.
         accepted_token_ids[original_indices] = accepted_token_ids.clone()

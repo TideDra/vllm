@@ -43,12 +43,17 @@ class EnsembleSampler(RejectionSampler):
         if batch_size == 0:
             return torch.empty(0, k + 1, device=draft_probs.device, dtype=int)
 
-        target_probs = target_with_bonus_probs[:, :-1]
         if distribution_ensemble_lambda is not None:
             lambda_d = torch.tensor(distribution_ensemble_lambda,
                                     dtype=draft_probs.dtype,
                                     device=draft_probs.device).view(-1, 1, 1)
-            target_probs = lambda_d * target_probs + (1 - lambda_d) * draft_probs
+            target_probs = lambda_d * target_with_bonus_probs[:, :-1] + (1 - lambda_d) * draft_probs
+            ensembled_logprobs = torch.zeros_like(target_with_bonus_probs)
+            ensembled_logprobs[:, :-1] = target_probs
+            ensembled_logprobs.log_()
+        else:
+            target_probs = target_with_bonus_probs[:, :-1]
+            ensembled_logprobs = None
 
         accepted = self._get_accepted(target_probs,
                                       draft_probs,
@@ -75,7 +80,7 @@ class EnsembleSampler(RejectionSampler):
             -torch.ones_like(bonus_token_ids), # no bonus token
         )
 
-        return output_token_ids
+        return output_token_ids, ensembled_logprobs
     
     def _get_accepted(
         self,
