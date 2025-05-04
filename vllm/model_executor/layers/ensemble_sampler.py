@@ -48,12 +48,8 @@ class EnsembleSampler(RejectionSampler):
                                     dtype=draft_probs.dtype,
                                     device=draft_probs.device).view(-1, 1, 1)
             target_probs = lambda_d * target_with_bonus_probs[:, :-1] + (1 - lambda_d) * draft_probs
-            ensembled_logprobs = torch.zeros_like(target_with_bonus_probs)
-            ensembled_logprobs[:, :-1] = target_probs
-            ensembled_logprobs.log_()
         else:
             target_probs = target_with_bonus_probs[:, :-1]
-            ensembled_logprobs = None
 
         accepted = self._get_accepted(target_probs,
                                       draft_probs,
@@ -78,8 +74,11 @@ class EnsembleSampler(RejectionSampler):
             recovered_token_ids,
             draft_token_ids,
             -torch.ones_like(bonus_token_ids), # no bonus token
-        )
+        ) # [batch_size, k+1]
 
+        ensembled_logprobs = torch.zeros_like(target_with_bonus_probs)
+        ensembled_logprobs[:, :-1] = self._calculate_ensemble_logprobs(target_probs, draft_probs, recovered_probs.reshape(batch_size,k,vocab_size), acceptance_ensemble_lambda)
+        ensembled_logprobs.log_()
         return output_token_ids, ensembled_logprobs
     
     def _get_accepted(
@@ -139,3 +138,25 @@ class EnsembleSampler(RejectionSampler):
         accepted = uniform_rand < accept_ratio
 
         return accepted
+    
+    def _calculate_ensemble_logprobs(
+        self,
+        target_probs: torch.Tensor, # [batch_size, k, vocab_size]
+        draft_probs: torch.Tensor, # [batch_size, k, vocab_size]
+        recovered_probs: torch.Tensor, # [batch_size, k, vocab_size]
+        acceptance_ensemble_lambda: Optional[List[float]],
+    ) -> torch.Tensor:
+        bs,k,vocab_size = draft_probs.shape
+        if acceptance_ensemble_lambda is not None:
+            lambda_a = torch.tensor(acceptance_ensemble_lambda,
+                                    dtype=draft_probs.dtype,
+                                    device=draft_probs.device).view(-1, 1).repeat(1,k).unsqueeze(-1)
+            lambda_a.clamp_min_(1e-4)
+        else:
+            lambda_a = torch.ones_like(target_probs, device=target_probs.device)
+
+        accept_prob = torch.minimum(draft_probs, target_probs/lambda_a) # [batch_size, k, vocab_size]
+        expected_reject_prob = 1 - accept_prob.sum(dim=-1, keepdim=True) # [batch_size, k, 1]
+
+        return accept_prob+expected_reject_prob*recovered_probs
+        
